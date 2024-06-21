@@ -1,0 +1,1 @@
+VLLM_NCCL_SO_PATH=/home/yihua/libnccl.so.2.18.1 DOCKER_BUILDKIT=1 docker build . --target vllm-lmcache --tag vllm-lmcache:test --build-arg max_jobs=32 --build-arg nvcc_threads=32 --platform linux/amd64

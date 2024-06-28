@@ -479,13 +479,12 @@ class LLMEngine:
                                                 output_by_sequence_group):
             seq_group = scheduled_seq_group.seq_group
             
-            #FIXME(Jiayi): This is a hack, please remove
-            if scheduled_seq_group.token_chunk_size == 3373:
-                seq_group.update_num_computed_tokens(
-                    3367)
-            else:
-                seq_group.update_num_computed_tokens(
-                    scheduled_seq_group.token_chunk_size)
+            #HACK(Jiayi): This is a hack, is there a better way?
+            for seq in seq_group.seqs_dict.values():
+                if scheduled_seq_group.token_chunk_size > seq.data.get_len():
+                    scheduled_seq_group.token_chunk_size = seq.data.get_len()
+            seq_group.update_num_computed_tokens(
+                scheduled_seq_group.token_chunk_size)
 
             # If all sequences in the sequence group are in DECODE, then we can
             # process the output tokens. Otherwise, they are (chunked) prefill

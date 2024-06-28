@@ -79,8 +79,8 @@ class Worker(WorkerBase):
         #lmcache_config = LMCacheEngineConfig.from_file(model_config.lmcache_config_file)
         
         init_skip_len = 1
-        sep_token_id = 422#TODO(Jiayi): please use `#` for now
-        lmcache_config = LMCacheEngineConfig("cpu", init_skip_len, sep_token_id)
+        sep_token_ids= [422,422]#TODO(Jiayi): please use `#` for now
+        lmcache_config = LMCacheEngineConfig("cpu", init_skip_len, sep_token_ids)
         LMCacheEngineBuilder.get_or_create("vllm", lmcache_config, lmcache_metadata)
 
         self.model_runner = ModelRunner(

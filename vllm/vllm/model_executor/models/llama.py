@@ -354,7 +354,7 @@ class LlamaModel(nn.Module):
                     check_layer_idx += 1
                 elif i > self.cache_fuse_metadata["check_layers"][0]:
                     temp_status = 2 # after check
-            if self.old_kvs[0] is not None:
+            if self.old_kvs is not None:
                 old_kv = [self.old_kvs[0][i], self.old_kvs[1][i]]
             else:
                 old_kv = [None, None]

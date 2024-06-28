@@ -283,14 +283,14 @@ class ModelRunner:
             # Query Cache engine to get the cache
             # FIXME(Jiayi): should load to correct device in multi-gpu setting 
             loaded_kv, loaded_kv_indices, tokens_new = self.lmcache_driver.retrive(kv_caches, seq_group_metadata)
-            if loaded_kv[0] is not None:
-                loaded_kv = [loaded_kv[0].cuda(), loaded_kv[1].cuda()]
+            
+            if loaded_kv is not None:
+                #loaded_kv = [loaded_kv[0].cuda(), loaded_kv[1].cuda()]
                 seq_data.prompt_token_ids = tokens_new.cpu().tolist()
-                #seq_group_metadata.token_chunk_size = len(seq_data.prompt_token_ids)
+                #seq_group_metadata._token_chunk_size = len(seq_data.prompt_token_ids)
                 token_chunk_size = len(seq_data.prompt_token_ids)
-                #import pdb
-                #pdb.set_trace()
-            #print(loaded_kv_indices)
+                print(seq_group_metadata._token_chunk_size)
+            
             self.model.model.old_kvs = loaded_kv
             #print(loaded_kv)
             
@@ -907,8 +907,17 @@ class ModelRunner:
         }
         if self.vision_language_config:
             execute_model_kwargs.update({"image_input": multi_modal_input})
+        
+        torch.cuda.synchronize()
+        start = torch.cuda.Event(enable_timing=True)
+        end = torch.cuda.Event(enable_timing=True)
+        start.record()
         hidden_states = model_executable(**execute_model_kwargs)
-
+        end.record()
+        torch.cuda.synchronize()
+        partial_time = start.elapsed_time(end)/1000
+        print(f"Model running time: {partial_time}")
+        
         # HACK(Jiayi): only use cpu local store
         # Cache engine: gather the kv cache and store it to cache engine
         # if self.cache_engine is not None and \

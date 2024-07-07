@@ -179,7 +179,7 @@ class LlamaAttention(nn.Module):
                                         old_kv[0])
             
         if cache_fuse_metadata['collect']:
-            self.hack_kv = [k, v]
+            self.hack_kv = [k.clone(), v.clone()]
         q, k = self.rotary_emb(positions, q, k)
         attn_output = self.attn(q, k, v, kv_cache, attn_metadata,
                                 status, cache_fuse_metadata, old_kv,

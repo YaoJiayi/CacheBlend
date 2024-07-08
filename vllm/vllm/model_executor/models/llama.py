@@ -88,7 +88,7 @@ class LlamaAttention(nn.Module):
         num_kv_heads: int,
         rope_theta: float = 10000,
         rope_scaling: Optional[Dict[str, Any]] = None,
-        max_position_embeddings: int = 8192,
+        max_position_embeddings: int = 32768,
         linear_method: Optional[LinearMethodBase] = None,
         bias: bool = False,
         sliding_window: Optional[int] = None,
@@ -170,16 +170,21 @@ class LlamaAttention(nn.Module):
         q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
         
         # HACK(Jiayi): Rotate the old K 
-        # Need to modify the kernel to only take K as input 
+        # Need to modify the kernel to only take K as input
         if status in [1,2]:
             if cache_fuse_metadata["fake_q"] is None:
                 cache_fuse_metadata['fake_q'] = torch.rand_like(q)
+                print(status)
+                print(q.shape)
+                print(q.dtype)
+                print(old_kv[0].shape)
+                print(old_kv[0].dtype)
             _, old_kv[0] = self.rotary_emb(cache_fuse_metadata['org_pos'],
                                         cache_fuse_metadata['fake_q'],
                                         old_kv[0])
             
         if cache_fuse_metadata['collect']:
-            self.hack_kv = [k, v]
+            self.hack_kv = [k.clone(), v.clone()]
         q, k = self.rotary_emb(positions, q, k)
         attn_output = self.attn(q, k, v, kv_cache, attn_metadata,
                                 status, cache_fuse_metadata, old_kv,
@@ -299,17 +304,20 @@ class LlamaModel(nn.Module):
 
         self.cache_fuse_metadata = {"check_layers":[1],
                                     "check": False,
-                                    "recomp_ratios":[0.16],
-                                    "recomp_ratio":0.16,
+                                    "prefix_only": False,
+                                    "recomp_ratios":[0.15],
+                                    "recomp_ratio":0.15,
                                     "original_slot_mapping":None,
                                     "our_slot_mapping":None,
                                     "kv_cache_dtype": None,
                                     "attn_bias": None,
                                     "imp_indices": None,
                                     "org_seq_len": None,
-                                    "collect": False}
+                                    "collect": False,
+                                    "suffix_len":False,
+                                    "fake_q":None}
         
-        self.old_kvs = [None, None] # K and V
+        self.old_kvs = None # K and V
         
     def get_input_embeddings(self, input_ids: torch.Tensor) -> torch.Tensor:
         return self.embed_tokens(input_ids)
@@ -337,22 +345,26 @@ class LlamaModel(nn.Module):
                 self.cache_fuse_metadata["imp_indices"] = None
                 self.cache_fuse_metadata["original_slot_mapping"] = None
                 self.cache_fuse_metadata["our_slot_mapping"] = None
-                self.cache_fuse_metadata['org_pos'] = positions[:]
+                self.cache_fuse_metadata['org_pos'] = positions[:].clone()
             #FIXME(Jiayi): fix this clone for faster time (Is this still needed?)
             #self.cache_fuse_metadata["our_slot_mapping"] = input_metadata.slot_mapping.clone()
         else:
             temp_status = -1 # decode
         residual = None
         
-        
+        if self.cache_fuse_metadata["prefix_only"]:
+            check_layers = [0]
+        else:
+            check_layers = self.cache_fuse_metadata["check_layers"]
+            
         for i in range(len(self.layers)):
             
             if self.cache_fuse_metadata["check"]:
-                if i in self.cache_fuse_metadata["check_layers"]:
+                if i in check_layers:
                     temp_status = 1 # check this layer
                     self.cache_fuse_metadata["check_layer"] = self.cache_fuse_metadata["check_layers"][check_layer_idx]
                     check_layer_idx += 1
-                elif i > self.cache_fuse_metadata["check_layers"][0]:
+                elif i > check_layers[0]:
                     temp_status = 2 # after check
             if self.old_kvs is not None:
                 old_kv = [self.old_kvs[0][i], self.old_kvs[1][i]]

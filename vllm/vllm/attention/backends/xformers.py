@@ -6,7 +6,8 @@ import torch
 from xformers import ops as xops
 from xformers.ops.fmha.attn_bias import (AttentionBias,
                                          BlockDiagonalCausalMask,
-                                         LowerTriangularMaskWithTensorBias)
+                                         LowerTriangularMaskWithTensorBias,
+                                         LowerTriangularFromBottomRightMask)
 
 from vllm.attention.backends.abstract import (AttentionBackend, AttentionImpl,
                                               AttentionMetadata,
@@ -14,6 +15,7 @@ from vllm.attention.backends.abstract import (AttentionBackend, AttentionImpl,
 from vllm.attention.ops.paged_attn import (PagedAttention,
                                            PagedAttentionMetadata)
 from vllm.logger import init_logger
+import torch.nn.functional as F
 
 logger = init_logger(__name__)
 
@@ -201,24 +203,27 @@ class XFormersImpl(AttentionImpl):
             value_old = old_kv[1].view(-1, self.num_kv_heads, self.head_size)
         
         if status in [1]:
-            last_len = 1
-            topk_num = int((value.shape[0]-last_len)*cache_fuse_metadata["recomp_ratio"])
-
-            temp_diff = torch.sum((value[:-last_len,:,:]-value_old[:-last_len,:,:])**2, dim=[1,2])
-            top_indices = torch.topk(temp_diff, k=topk_num).indices
+            last_len = cache_fuse_metadata['suffix_len']
+            total_len = value.shape[0]
+            last_indices = [total_len-last_len+l for l in range(last_len)]
+            if cache_fuse_metadata["prefix_only"]:
+                top_indices = torch.tensor(last_indices, device=key.device)
+            else:
+                topk_num = int((total_len-last_len)*cache_fuse_metadata["recomp_ratio"])
+                temp_diff = torch.sum((value[:-last_len,:,:]-value_old[:-last_len,:,:])**2, dim=[1,2])
+                top_indices = torch.topk(temp_diff, k=topk_num).indices
+                top_indices, _ = torch.sort(top_indices)
+                top_indices = torch.cat([top_indices,torch.tensor(last_indices, device=top_indices.device)])
             
-            # FIXME(Jiayi): Need changing to query len
-            for l in range(last_len):
-                temp_idx = num_tokens-(last_len-l)
-                top_indices = torch.cat([top_indices,torch.tensor([temp_idx], device=top_indices.device)])
-            #if num_tokens-1 not in top_indices:
-            #    top_indices = torch.cat([top_indices,torch.tensor([num_tokens-1], device=top_indices.device)])
-            #our_slot_mapping = attn_metadata.slot_mapping[top_indices]
-            #cache_fuse_metadata["our_slot_mapping"] = our_slot_mapping
+            
             query = query[top_indices]
             cache_fuse_metadata["imp_indices"] = top_indices
             
-            attn_bias = _make_partial_bias_gqa(cache_fuse_metadata, query.device, self.num_kv_heads, self.num_queries_per_kv)
+            if cache_fuse_metadata["prefix_only"]:
+                attn_bias = LowerTriangularFromBottomRightMask()
+            else:
+                attn_bias = _make_partial_bias_gqa(cache_fuse_metadata, query.device, self.num_kv_heads, self.num_queries_per_kv)
+                #LowerTriangularFromBottomRightMask()
             cache_fuse_metadata["attn_bias"] = attn_bias
             attn_metadata.prefill_metadata.attn_bias=None
             
@@ -249,23 +254,6 @@ class XFormersImpl(AttentionImpl):
             key_cache, value_cache = PagedAttention.split_kv_cache(
                 kv_cache, self.num_kv_heads, self.head_size)
             
-
-            #if status in [2]:
-                # TODO(Jiayi): This is full update/ Do we need partial update? 
-            #    PagedAttention.write_to_paged_cache(key, value, key_cache,
-            #                                        value_cache,
-            #                                        cache_fuse_metadata["our_slot_mapping"],
-            #                                        attn_metadata.kv_cache_dtype,
-            #                                        kv_scale)
-            #else:
-            # Reshape the input keys and values and store them in the cache.
-            # If kv_cache is not provided, the new key and value tensors are
-            # not cached. This happens during the initial memory profiling run.
-            #    PagedAttention.write_to_paged_cache(key, value, key_cache,
-            #                                        value_cache,
-            #                                        attn_metadata.slot_mapping,
-            #                                        attn_metadata.kv_cache_dtype,
-            #                                        kv_scale)
             PagedAttention.write_to_paged_cache(key, value, key_cache,
                                                 value_cache,
                                                 attn_metadata.slot_mapping,
@@ -282,7 +270,6 @@ class XFormersImpl(AttentionImpl):
             query = query
             key = key[:num_prefill_tokens]
             value = value[:num_prefill_tokens]
-            
             assert query.shape[0] == len(cache_fuse_metadata["imp_indices"])
             #assert decode_query.shape[0] == num_decode_tokens
         else:
@@ -423,10 +410,10 @@ class XFormersImpl(AttentionImpl):
             query = query.unsqueeze(0)
             key = key.unsqueeze(0)
             value = value.unsqueeze(0)
-            
             if status in [1,2]:
                 #import pdb
                 #pdb.set_trace()
+                
                 out = xops.memory_efficient_attention_forward(
                         query,
                         key,
@@ -435,6 +422,13 @@ class XFormersImpl(AttentionImpl):
                         p=0.0,
                         scale=self.scale,
                     )
+                
+                #with torch.backends.cuda.sdp_kernel(enable_math=False):
+                #out = F.scaled_dot_product_attention(
+                #    query,
+                #    key,
+                #    value,
+                #    attn_mask=cache_fuse_metadata['attn_bias'],)
             else:
                 out = xops.memory_efficient_attention_forward(
                 query,
@@ -530,8 +524,7 @@ def _make_partial_bias_gqa(cache_fuse_metadata,
     attn_mask = attn_mask[:,:,:,imp_indices]
     attn_mask = attn_mask.expand(1,
                                  num_kv_heads,num_queries_per_kv,-1,-1)
-    #import pdb
-    #pdb.set_trace()
+
     attn_mask_padded = torch.empty(
         1,
         num_kv_heads,
@@ -541,32 +534,30 @@ def _make_partial_bias_gqa(cache_fuse_metadata,
         device=device,
         dtype=dtype,
     ).copy_(attn_mask)[:, :, :, :, :seq_len]
-    #attn_mask_padded = LowerTriangularMaskWithTensorBias(attn_mask_padded)
     return attn_mask_padded
 
-def _fetch_maetrailized_mask_gqa(q_len,num_kv_heads,num_queries_per_kv,device,dtype):
-    seq_len = q_len
+'''
+def _make_partial_bias_gqa(cache_fuse_metadata, 
+                       device,
+                       num_kv_heads,
+                       num_queries_per_kv,):
+    seq_len = cache_fuse_metadata['org_seq_len']
     padded_len = (seq_len + 7) // 8 * 8
-    attn_mask = torch.triu(torch.ones(seq_len,
+    dtype = cache_fuse_metadata['kv_cache_dtype']
+    imp_indices = cache_fuse_metadata['imp_indices']
+    attn_mask = torch.triu(torch.ones(padded_len,
                                       padded_len,
                                       dtype=dtype,
                                       device=device),
                            diagonal=1)
     #FIXME(Jiayi): The first 1 (bsz) is a hack
-    attn_mask = (attn_mask * torch.finfo(dtype).min).view(#1,
-                                                          1, 1, seq_len, padded_len) #FIXME(Jiayi): Now only focus on bsz=1
-    attn_mask = attn_mask.expand(#1,
-                                 num_kv_heads, num_queries_per_kv,-1,-1)
-    
-    attn_mask_padded = torch.empty(
-        #1,
-        num_kv_heads,
-        num_queries_per_kv,
-        seq_len,
-        padded_len,
-        device=device,
-        dtype=dtype,
-    ).copy_(attn_mask)[#:, 
-                       :, :, :, :seq_len]
+    attn_mask = (attn_mask * torch.finfo(dtype).min).view(1, 1, padded_len, padded_len) #FIXME(Jiayi): Now only focus on bsz=1
+    attn_mask = attn_mask[:,:,imp_indices]
+    attn_mask = attn_mask.expand(1,
+                                 num_kv_heads,num_queries_per_kv,-1,-1)
+    #import pdb
+    #pdb.set_trace()
+    attn_mask_padded = attn_mask[:, :, :, :, :seq_len]
     #attn_mask_padded = LowerTriangularMaskWithTensorBias(attn_mask_padded)
     return attn_mask_padded
+'''

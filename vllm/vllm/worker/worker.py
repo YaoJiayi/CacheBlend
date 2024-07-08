@@ -73,15 +73,16 @@ class Worker(WorkerBase):
                 "To be tested: vision language model with LoRA settings.")
 
         # create lmcache engine 
-        #if model_config.lmcache_config_file is not None:
-        
         lmcache_metadata = LMCacheEngineMetadata(model_config.model, parallel_config.world_size, rank, fmt="vllm")
-        #lmcache_config = LMCacheEngineConfig.from_file(model_config.lmcache_config_file)
+        if model_config.lmcache_config_file is not None:
+            lmcache_config = LMCacheEngineConfig.from_file(model_config.lmcache_config_file)
+            LMCacheEngineBuilder.get_or_create("vllm", lmcache_config, lmcache_metadata)
+        else:
+            lmcache_config = LMCacheEngineConfig(None,"cpu",None,"fake.pt",None,None,None,False)
+            LMCacheEngineBuilder.get_or_create("vllm", lmcache_config, lmcache_metadata)
         
-        init_skip_len = 1
-        sep_token_ids= [422,422]#TODO(Jiayi): please use `#` for now
-        lmcache_config = LMCacheEngineConfig("cpu", init_skip_len, sep_token_ids)
-        LMCacheEngineBuilder.get_or_create("vllm", lmcache_config, lmcache_metadata)
+        
+        #lmcache_config = LMCacheEngineConfig("cpu", init_skip_len, sep_token_ids)
 
         self.model_runner = ModelRunner(
             model_config,

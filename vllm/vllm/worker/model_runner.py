@@ -164,15 +164,6 @@ class ModelRunner:
         self.cache_engine = LMCacheEngineBuilder.get("vllm")
         self.lmcache_driver = LMCVLLMDriver(self.cache_engine, self.model_config, self.parallel_config, self.device)
         
-        # HACK(Jiayi): Initialize the cache engine here
-        #from lmcache.cache_engine import LMCacheEngine
-        #from lmcache.config import LMCacheEngineConfig, LMCacheEngineMetadata
-        #config = LMCacheEngineConfig.from_file("../examples/example.yaml")
-        #meta = LMCacheEngineMetadata("mistralai/Mistral-7B-Instruct-v0.2", 1, 0, "vllm")
-        #self.cache_engine = LMCacheEngine(config, meta)
-        
-        #self.lmcache_driver = LMCVLLMDriver(self.cache_engine, self.model_config, self.parallel_config, self.device)
-        #self.hack_kvs = None
 
     def load_model(self) -> None:
         with CudaMemoryProfiler() as m:
@@ -282,16 +273,34 @@ class ModelRunner:
 
             # Query Cache engine to get the cache
             # FIXME(Jiayi): should load to correct device in multi-gpu setting 
-            loaded_kv, loaded_kv_indices, tokens_new = self.lmcache_driver.retrive(kv_caches, seq_group_metadata)
+            if self.cache_engine.enable_cache:
+                loaded_kv, loaded_kv_indices, tokens_new, prefix_only = self.lmcache_driver.retrive(
+                    kv_caches, seq_group_metadata)
+            else:
+                loaded_kv = None
             
+            #TODO: maybe it's cleaner to move the following part outside vllm
             if loaded_kv is not None:
-                #loaded_kv = [loaded_kv[0].cuda(), loaded_kv[1].cuda()]
                 seq_data.prompt_token_ids = tokens_new.cpu().tolist()
-                #seq_group_metadata._token_chunk_size = len(seq_data.prompt_token_ids)
+                retrieved_len = len(loaded_kv_indices)
                 token_chunk_size = len(seq_data.prompt_token_ids)
-                print(seq_group_metadata._token_chunk_size)
-            
-            self.model.model.old_kvs = loaded_kv
+                self.model.model.cache_fuse_metadata["suffix_len"] = token_chunk_size-retrieved_len
+                self.model.model.cache_fuse_metadata["check"] = True
+                seq_group_metadata.block_tables[seq_id] = seq_group_metadata.block_tables[seq_id][:token_chunk_size]
+                print(f"old len: {seq_group_metadata._token_chunk_size}")
+                print(f"truncated len: {token_chunk_size}")
+                print(f"retrieved len: {retrieved_len}")
+                print(f"loaded kv shape: {loaded_kv.shape}")
+                if prefix_only:
+                    print(f"Using prefix caching")
+                    self.model.model.cache_fuse_metadata["prefix"] = True
+                else:
+                    self.model.model.cache_fuse_metadata["prefix"] = False
+                #TODO(Jiayi): need to remove the hardcodes
+                self.model.model.old_kvs = torch.empty((2,32,token_chunk_size,1024),
+                                                       dtype=loaded_kv.dtype,
+                                                       device=loaded_kv.device)
+                self.model.model.old_kvs[:,:,:retrieved_len] = loaded_kv
             #print(loaded_kv)
             
             # TODO(Jiayi): need to align the format
@@ -315,7 +324,8 @@ class ModelRunner:
             prompt_tokens = seq_data.get_token_ids()[computed_len:prefill_end]
             prompt_len = prefill_end
             prompt_lens.append(prompt_len)
-
+            print(f"seq_len: {seq_data.get_len()}")
+            print(f"prefill_end: {prefill_end}, computed_len: {computed_len}")
             # NOTE: This only works for oooooooxxx style attention.
             if computed_block_nums is not None and len(
                     computed_block_nums) > 0 and self.sliding_window is None:

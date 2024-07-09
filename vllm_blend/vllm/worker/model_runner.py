@@ -27,8 +27,8 @@ from vllm.utils import (CudaMemoryProfiler, async_tensor_h2d, is_hip,
                         is_pin_memory_available, make_tensor_with_pad,
                         maybe_expand_dim)
 
-from lmcache.cache_engine import LMCacheEngineBuilder
-from lmcache_vllm import LMCVLLMDriver, broadcast_tokens_and_block_tables, broadcast_input_ids_list
+#from lmcache.cache_engine import LMCacheEngineBuilder
+#from lmcache_vllm import LMCVLLMDriver, broadcast_tokens_and_block_tables, broadcast_input_ids_list
 
 logger = init_logger(__name__)
 
@@ -694,7 +694,7 @@ class ModelRunner:
                 else:
                     decode_reqs.append(seq_group_meta)
 
-            broadcast_tokens_and_block_tables(self.is_driver_worker, prefill_reqs, self.device)
+            #broadcast_tokens_and_block_tables(self.is_driver_worker, prefill_reqs, self.device)
 
             # Prepare input tensors.
             (
@@ -796,7 +796,7 @@ class ModelRunner:
                 metadata_dict = decode_attn_metadata.asdict_zerocopy()
                 broadcast_tensor_dict(metadata_dict, src=0)
         else:
-            tokens_and_block_tables = broadcast_tokens_and_block_tables(self.is_driver_worker, seq_group_metadata_list, self.device)
+            #tokens_and_block_tables = broadcast_tokens_and_block_tables(self.is_driver_worker, seq_group_metadata_list, self.device)
             for element in tokens_and_block_tables:
                 tokens, block_table = element
                 #if self.cache_engine is not None and block_table is not None:

@@ -212,7 +212,7 @@ class XFormersImpl(AttentionImpl):
                 #first_len = 35
                 #first_indices = [l for l in range(first_len)]
                 topk_num = int((total_len-last_len)*cache_fuse_metadata["recomp_ratio"])
-                temp_diff = torch.sum((value[first_len:-last_len,:,:]-value_old[first_len:-last_len,:,:])**2, dim=[1,2])
+                temp_diff = torch.sum((value[:-last_len,:,:]-value_old[:-last_len,:,:])**2, dim=[1,2])
                 top_indices = torch.topk(temp_diff, k=topk_num).indices
                 top_indices, _ = torch.sort(top_indices)
                 #top_indices = torch.cat([torch.tensor(first_indices, device=top_indices.device),

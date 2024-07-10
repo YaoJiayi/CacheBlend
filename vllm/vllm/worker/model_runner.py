@@ -975,6 +975,10 @@ class ModelRunner:
         # Enable top-k sampling to reflect the accurate memory usage.
         sampling_params = SamplingParams(top_p=0.99, top_k=self.vocab_size - 1)
         max_num_batched_tokens = self.scheduler_config.max_num_batched_tokens
+        
+        # HACK(Jiayi): smaller batch for materialized mask
+        max_num_batched_tokens = min(max_num_batched_tokens,4096)
+        
         max_num_seqs = self.scheduler_config.max_num_seqs
 
         # This represents the maximum number of different requests

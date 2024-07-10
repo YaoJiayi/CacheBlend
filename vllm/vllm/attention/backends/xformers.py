@@ -209,11 +209,17 @@ class XFormersImpl(AttentionImpl):
             if cache_fuse_metadata["prefix_only"]:
                 top_indices = torch.tensor(last_indices, device=key.device)
             else:
+                #first_len = 35
+                #first_indices = [l for l in range(first_len)]
                 topk_num = int((total_len-last_len)*cache_fuse_metadata["recomp_ratio"])
-                temp_diff = torch.sum((value[:-last_len,:,:]-value_old[:-last_len,:,:])**2, dim=[1,2])
+                temp_diff = torch.sum((value[first_len:-last_len,:,:]-value_old[first_len:-last_len,:,:])**2, dim=[1,2])
                 top_indices = torch.topk(temp_diff, k=topk_num).indices
                 top_indices, _ = torch.sort(top_indices)
-                top_indices = torch.cat([top_indices,torch.tensor(last_indices, device=top_indices.device)])
+                #top_indices = torch.cat([torch.tensor(first_indices, device=top_indices.device),
+                #                         top_indices,
+                #                         torch.tensor(last_indices, device=top_indices.device)])
+                top_indices = torch.cat([top_indices,
+                                         torch.tensor(last_indices, device=top_indices.device)])
             
             
             query = query[top_indices]
@@ -384,11 +390,17 @@ class XFormersImpl(AttentionImpl):
         if attn_metadata.attn_bias is None:
             if self.alibi_slopes is None:
                 # TODO(Jiayi): please pre-allocate mask for faster inference
-                #if cache_fuse_metadata["check"]:
-                #    attn_metadata.attn_bias = _fetch_maetrailized_mask_gqa(query.shape[0], self.num_kv_heads, self.num_queries_per_kv, query.device,query.dtype)
-                #else:
-                attn_metadata.attn_bias = BlockDiagonalCausalMask.from_seqlens(
-                                                attn_metadata.prompt_lens)
+                #attn_metadata.attn_bias = BlockDiagonalCausalMask.from_seqlens(
+                #                                attn_metadata.prompt_lens)
+                attn_metadata.attn_bias = _make_full_bias_gqa(
+                                                1,
+                                                len(attn_metadata.prompt_lens)*attn_metadata.prompt_lens[0],
+                                                value.dtype,
+                                                value.device,
+                                                self.num_kv_heads,
+                                                self.num_queries_per_kv
+                                                )
+                
                 '''
                 attn_bias = BlockDiagonalCausalMask.from_seqlens(
                     attn_metadata.prompt_lens)
@@ -423,12 +435,6 @@ class XFormersImpl(AttentionImpl):
                         scale=self.scale,
                     )
                 
-                #with torch.backends.cuda.sdp_kernel(enable_math=False):
-                #out = F.scaled_dot_product_attention(
-                #    query,
-                #    key,
-                #    value,
-                #    attn_mask=cache_fuse_metadata['attn_bias'],)
             else:
                 out = xops.memory_efficient_attention_forward(
                 query,
@@ -536,28 +542,32 @@ def _make_partial_bias_gqa(cache_fuse_metadata,
     ).copy_(attn_mask)[:, :, :, :, :seq_len]
     return attn_mask_padded
 
-'''
-def _make_partial_bias_gqa(cache_fuse_metadata, 
-                       device,
-                       num_kv_heads,
-                       num_queries_per_kv,):
-    seq_len = cache_fuse_metadata['org_seq_len']
+def _make_full_bias_gqa(bsz,
+                        seq_len,
+                        dtype, 
+                        device,
+                        num_kv_heads,
+                        num_queries_per_kv,):
     padded_len = (seq_len + 7) // 8 * 8
-    dtype = cache_fuse_metadata['kv_cache_dtype']
-    imp_indices = cache_fuse_metadata['imp_indices']
     attn_mask = torch.triu(torch.ones(padded_len,
                                       padded_len,
                                       dtype=dtype,
                                       device=device),
                            diagonal=1)
     #FIXME(Jiayi): The first 1 (bsz) is a hack
-    attn_mask = (attn_mask * torch.finfo(dtype).min).view(1, 1, padded_len, padded_len) #FIXME(Jiayi): Now only focus on bsz=1
-    attn_mask = attn_mask[:,:,imp_indices]
-    attn_mask = attn_mask.expand(1,
+    attn_mask = (attn_mask * torch.finfo(dtype).min).view(1, 
+                                                          1, 1, padded_len, padded_len) #FIXME(Jiayi): Now only focus on bsz=1
+    attn_mask = attn_mask[:,:,:,:seq_len]
+    attn_mask = attn_mask.expand(bsz,
                                  num_kv_heads,num_queries_per_kv,-1,-1)
-    #import pdb
-    #pdb.set_trace()
-    attn_mask_padded = attn_mask[:, :, :, :, :seq_len]
-    #attn_mask_padded = LowerTriangularMaskWithTensorBias(attn_mask_padded)
+
+    attn_mask_padded = torch.empty(
+        bsz,
+        num_kv_heads,
+        num_queries_per_kv,
+        seq_len,
+        padded_len,
+        device=device,
+        dtype=dtype,
+    ).copy_(attn_mask)[:, :, :, :, :seq_len]
     return attn_mask_padded
-'''

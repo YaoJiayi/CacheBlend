@@ -99,7 +99,46 @@ class Worker(WorkerBase):
         # initialize_cache.
         self.cache_engine: CacheEngine
         self.gpu_cache: List[torch.Tensor]
+    
+    #TODO(Jiayi): needs refactoring
+    def set_collect_check(self, collect, check):
+        cache_fuse_metadata = self.model_runner.model.model.cache_fuse_metadata
+        cache_fuse_metadata['collect'] = collect
+        cache_fuse_metadata['check'] = check
+    
+    # TODO(Jiayi): needs refactoring
+    def dump(self, path): 
+        cache_driver = self.model_runner.lmcache_driver
+        cache_driver.dump(path)
+    
+    # TODO(Jiayi: needs refactoring)
+    def concat_hack_kvs(self, i, doc_chunk_id, doc_chunk_id_store,
+                        s_start_1_len, s_start_len):
+        k_tensor = None
+        v_tensor = None
+        cache_driver = self.model_runner.lmcache_driver
+        llm_layers = self.model_runner.model.model.layers
+        for j in range(len(llm_layers)):
+            past_key_values = llm_layers[j].self_attn.hack_kv
+            if i == 0:
+                temp_k = past_key_values[0][:s_start_len].clone() # do not chage with s_start_1
+                temp_v = past_key_values[1][:s_start_len].clone()
+            else:
+                temp_k = past_key_values[0][s_start_1_len:len(doc_chunk_id)+1].clone()
+                temp_v = past_key_values[1][s_start_1_len:len(doc_chunk_id)+1].clone()    
 
+            if j == 0:
+                k_tensor = torch.unsqueeze(temp_k, dim=0)
+                v_tensor = torch.unsqueeze(temp_v, dim=0)
+            else:
+                k_tensor = torch.cat((k_tensor,torch.unsqueeze(temp_k, dim=0)), dim=0)
+                v_tensor = torch.cat((v_tensor,torch.unsqueeze(temp_v, dim=0)), dim=0)
+        k_tensor = torch.unsqueeze(k_tensor, dim=0)
+        v_tensor = torch.unsqueeze(v_tensor, dim=0)
+        kv_tensor = torch.cat([k_tensor, v_tensor], dim=0)
+        cache_driver.collect_kv_and_store(torch.tensor(doc_chunk_id_store),
+                                        kv_tensor.cpu())
+        
     def init_device(self) -> None:
         if self.device_config.device.type == "cuda":
             # torch.distributed.all_reduce does not free the input tensor until

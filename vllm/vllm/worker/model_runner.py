@@ -28,7 +28,7 @@ from vllm.utils import (CudaMemoryProfiler, async_tensor_h2d, is_hip,
                         maybe_expand_dim)
 
 from lmcache.cache_engine import LMCacheEngineBuilder
-from lmcache_vllm import LMCVLLMDriver, broadcast_tokens_and_block_tables, broadcast_input_ids_list
+from lmcache_vllm import LMCVLLMDriver, broadcast_list, broadcast_tokens_and_block_tables, broadcast_input_ids_list
 
 logger = init_logger(__name__)
 
@@ -229,7 +229,70 @@ class ModelRunner:
     def get_max_block_per_batch(self) -> int:
         block_size = self.block_size
         return (self.max_context_len_to_capture + block_size - 1) // block_size
+    
+    def _prepare_prompt_worker(
+        self,
+        seq_group_metadata_list,
+        kv_caches,
+    ):
+        if len(seq_group_metadata_list) == 0:
+            return PreparePromptMetadata.empty()
 
+        for seq_group_metadata in seq_group_metadata_list:
+            assert seq_group_metadata.is_prompt
+            seq_ids = list(seq_group_metadata.seq_data.keys())
+            assert len(seq_ids) == 1
+            seq_id = seq_ids[0]
+
+            computed_block_nums = seq_group_metadata.computed_block_nums
+            if (self.scheduler_config is not None
+                    and self.scheduler_config.chunked_prefill_enabled
+                    and not (computed_block_nums is None
+                             or computed_block_nums == [])):
+                raise RuntimeError(
+                    "chunked prefill cannot be used with prefix caching "
+                    "now.")
+
+            token_chunk_size = seq_group_metadata.token_chunk_size
+            seq_data = seq_group_metadata.seq_data[seq_id]
+            computed_len = seq_data.get_num_computed_tokens()
+
+            # Query Cache engine to get the cache
+            # FIXME(Jiayi): should load to correct device in multi-gpu setting 
+            if self.cache_engine.enable_cache:
+                loaded_kv, loaded_kv_indices, tokens_new, prefix_only = self.lmcache_driver.retrive(
+                    kv_caches, seq_group_metadata)
+            else:
+                loaded_kv = None
+            
+            #TODO: maybe it's cleaner to move the following part outside vllm
+            if loaded_kv is not None:
+                seq_data.prompt_token_ids = tokens_new.cpu().tolist()
+                retrieved_len = len(loaded_kv_indices)
+                token_chunk_size = len(seq_data.prompt_token_ids)
+                self.model.model.cache_fuse_metadata["suffix_len"] = token_chunk_size-retrieved_len
+                self.model.model.cache_fuse_metadata["check"] = True
+                print(f"old len: {seq_group_metadata._token_chunk_size}")
+                print(f"truncated len: {token_chunk_size}")
+                print(f"retrieved len: {retrieved_len}")
+                print(f"loaded kv shape: {loaded_kv.shape}")
+                if prefix_only:
+                    print(f"Using prefix caching")
+                    self.model.model.cache_fuse_metadata["prefix"] = True
+                else:
+                    self.model.model.cache_fuse_metadata["prefix"] = False
+                #TODO(Jiayi): need to remove the hardcodes
+                self.model.model.old_kvs = torch.empty((loaded_kv.shape[0],
+                                                        loaded_kv.shape[1],
+                                                        token_chunk_size,
+                                                        loaded_kv.shape[3]
+                                                        ),
+                                                       dtype=loaded_kv.dtype,
+                                                       device=loaded_kv.device)
+                self.model.model.old_kvs[:,:,:retrieved_len] = loaded_kv
+           
+
+        
     def _prepare_prompt(
         self,
         seq_group_metadata_list: List[SequenceGroupMetadata],
@@ -296,8 +359,13 @@ class ModelRunner:
                     self.model.model.cache_fuse_metadata["prefix"] = True
                 else:
                     self.model.model.cache_fuse_metadata["prefix"] = False
-                #TODO(Jiayi): need to remove the hardcodes
-                self.model.model.old_kvs = torch.empty((2,32,token_chunk_size,1024),
+                #TODO(Jiayi): need to make old_kvs larger in order to
+                # support missing tokens/chunks in the middle
+                self.model.model.old_kvs = torch.empty((loaded_kv.shape[0],
+                                                        loaded_kv.shape[1],
+                                                        token_chunk_size,
+                                                        loaded_kv.shape[3]
+                                                        ),
                                                        dtype=loaded_kv.dtype,
                                                        device=loaded_kv.device)
                 self.model.model.old_kvs[:,:,:retrieved_len] = loaded_kv
@@ -716,16 +784,22 @@ class ModelRunner:
         kv_caches: List[torch.Tensor],
     ) -> Tuple[torch.Tensor, torch.Tensor, AttentionMetadata, SamplingMetadata,
                Set[LoRARequest], LoRAMapping, torch.Tensor]:
+        
         if self.is_driver_worker:
             prefill_reqs = []
             decode_reqs = []
+            
+            # FIXME(Jiayi): this needs to be simplified somehow
+            broadcast_list(self.is_driver_worker,
+                            seq_group_metadata_list,
+                            self.device)
             for seq_group_meta in seq_group_metadata_list:
                 if seq_group_meta.is_prompt:
                     prefill_reqs.append(seq_group_meta)
                 else:
                     decode_reqs.append(seq_group_meta)
 
-            broadcast_tokens_and_block_tables(self.is_driver_worker, prefill_reqs, self.device)
+            #broadcast_tokens_and_block_tables(self.is_driver_worker, prefill_reqs, self.device)
 
             # Prepare input tensors.
             (
@@ -828,12 +902,26 @@ class ModelRunner:
                 broadcast_tensor_dict(metadata_dict, src=0)
         else:
             #TODO (Jiayi): retrieve needs to be asynchronous if pipeline is needed
-            tokens_and_block_tables = broadcast_tokens_and_block_tables(self.is_driver_worker, seq_group_metadata_list, self.device)
-            for element in tokens_and_block_tables:
-                tokens, block_table = element
+            #tokens_and_block_tables = broadcast_tokens_and_block_tables(self.is_driver_worker, seq_group_metadata_list, self.device)
+            #for element in tokens_and_block_tables:
+            #    tokens, block_table = element
                 #if self.cache_engine is not None and block_table is not None:
                 #    self.lmcache_driver.retrive_and_inject(kv_caches, tokens, block_table)
 
+            # TODO(Jiayi): needs refactoring
+            
+            # TODO(Jiayi): simplify the following broadcast
+            seq_group_metadata_list = []
+            seq_group_metadata_list = broadcast_list(self.is_driver_worker,
+                                                     seq_group_metadata_list,
+                                                     self.device)
+            prefill_reqs = []
+            for seq_group_meta in seq_group_metadata_list:
+                if seq_group_meta.is_prompt:
+                    prefill_reqs.append(seq_group_meta)
+            if len(prefill_reqs) > 0:
+                self._prepare_prompt_worker(prefill_reqs, kv_caches)
+            
             metadata_dict = broadcast_tensor_dict(src=0)
             input_tokens = metadata_dict.pop("input_tokens")
             input_positions = metadata_dict.pop("input_positions")

@@ -214,13 +214,17 @@ class XFormersImpl(AttentionImpl):
                 topk_num = int((total_len-last_len)*cache_fuse_metadata["recomp_ratio"])
                 temp_diff = torch.sum((value[:-last_len,:,:]-value_old[:-last_len,:,:])**2, dim=[1,2])
                 top_indices = torch.topk(temp_diff, k=topk_num).indices
+                
+                
+                # FIXME(Jiayi): need to adapt to n-node scenario
+                xxx = [torch.zeros_like(top_indices), torch.zeros_like(top_indices)]
+                torch.distributed.barrier()
+                torch.distributed.all_gather(xxx, top_indices)
+                top_indices = torch_intersect1d(xxx[0],xxx[1])[:topk_num]
+                
                 top_indices, _ = torch.sort(top_indices)
-                #top_indices = torch.cat([torch.tensor(first_indices, device=top_indices.device),
-                #                         top_indices,
-                #                         torch.tensor(last_indices, device=top_indices.device)])
                 top_indices = torch.cat([top_indices,
                                          torch.tensor(last_indices, device=top_indices.device)])
-            
             
             query = query[top_indices]
             cache_fuse_metadata["imp_indices"] = top_indices
@@ -511,6 +515,7 @@ def _make_alibi_bias(
 
     return attn_biases
 
+# TODO(Jiayi): needs refactoring
 def _make_partial_bias_gqa(cache_fuse_metadata, 
                        device,
                        num_kv_heads,
@@ -542,6 +547,7 @@ def _make_partial_bias_gqa(cache_fuse_metadata,
     ).copy_(attn_mask)[:, :, :, :, :seq_len]
     return attn_mask_padded
 
+# TODO(Jiayi): needs refactoring
 def _make_full_bias_gqa(bsz,
                         seq_len,
                         dtype, 
@@ -571,3 +577,16 @@ def _make_full_bias_gqa(bsz,
         dtype=dtype,
     ).copy_(attn_mask)[:, :, :, :, :seq_len]
     return attn_mask_padded
+
+# TODO(Jiayi): needs refactoring
+def torch_intersect1d(t1: torch.Tensor, t2: torch.Tensor):
+    num_t1 = t1.numel()
+    _, inv, cnt = torch.unique(torch.cat([t1,t2]), return_counts=True, return_inverse=True)
+    
+    cnt_12 = cnt[inv]
+    cnt_t2 = cnt_12[num_t1:]
+
+    inds_t2_exclusive = (cnt_t2 == 1).nonzero()[..., 0]
+
+    t2_exclusive = t2[inds_t2_exclusive]
+    return torch.cat([t1,t2_exclusive])

@@ -54,7 +54,7 @@ COPY cmake cmake
 COPY CMakeLists.txt CMakeLists.txt
 COPY requirements-common.txt requirements-common.txt
 COPY requirements-cuda.txt requirements-cuda.txt
-COPY pyproject.toml pyproject.toml
+#COPY pyproject.toml pyproject.toml
 COPY vllm vllm
 
 # max jobs used by Ninja to build extensions
@@ -80,19 +80,19 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 #################### EXTENSION Build IMAGE ####################
 
 #################### FLASH_ATTENTION Build IMAGE ####################
-FROM dev as flash-attn-builder
-# max jobs used for build
-ARG max_jobs=2
-ENV MAX_JOBS=${max_jobs}
-# flash attention version
-ARG flash_attn_version=v2.5.6
-ENV FLASH_ATTN_VERSION=${flash_attn_version}
-
-WORKDIR /usr/src/flash-attention-v2
-
-# Download the wheel or build it if a pre-compiled release doesn't exist
-RUN pip --verbose wheel flash-attn==${FLASH_ATTN_VERSION} \
-    --no-build-isolation --no-deps --no-cache-dir
+#FROM dev as flash-attn-builder
+## max jobs used for build
+#ARG max_jobs=2
+#ENV MAX_JOBS=${max_jobs}
+## flash attention version
+#ARG flash_attn_version=v2.5.6
+#ENV FLASH_ATTN_VERSION=${flash_attn_version}
+#
+#WORKDIR /usr/src/flash-attention-v2
+#
+## Download the wheel or build it if a pre-compiled release doesn't exist
+#RUN pip --verbose wheel flash-attn==${FLASH_ATTN_VERSION} \
+#    --no-build-isolation --no-deps --no-cache-dir
 
 #################### FLASH_ATTENTION Build IMAGE ####################
 
@@ -115,9 +115,9 @@ RUN --mount=type=bind,from=build,src=/workspace/dist,target=/vllm-workspace/dist
     --mount=type=cache,target=/root/.cache/pip \
     pip install dist/*.whl --verbose
 
-RUN --mount=type=bind,from=flash-attn-builder,src=/usr/src/flash-attention-v2,target=/usr/src/flash-attention-v2 \
-    --mount=type=cache,target=/root/.cache/pip \
-    pip install /usr/src/flash-attention-v2/*.whl --no-cache-dir
+#RUN --mount=type=bind,from=flash-attn-builder,src=/usr/src/flash-attention-v2,target=/usr/src/flash-attention-v2 \
+#    --mount=type=cache,target=/root/.cache/pip \
+#    pip install /usr/src/flash-attention-v2/*.whl --no-cache-dir
 #################### vLLM installation IMAGE ####################
 
 
@@ -162,21 +162,27 @@ FROM vllm-openai AS vllm-lmcache
 WORKDIR /lmcache
 
 # install additional dependencies for openai api server
-RUN git clone https://github.com/LMCache/LMCache
+RUN git clone https://github.com/YaoJiayi/LMCache/
 WORKDIR /lmcache/LMCache
+RUN git checkout cacheblend
 RUN pip install -r requirements.txt
 RUN pip install -e .
 
 # Install lmcache-vllm driver
 WORKDIR /lmcache/
-RUN git clone https://github.com/LMCache/lmcache-vllm
+RUN git clone https://github.com/YaoJiayi/lmcache-vllm/
 WORKDIR /lmcache/lmcache-vllm
+RUN git checkout cacheblend
 RUN pip install -e .
 
-# Install cuda_ac
-WORKDIR /lmcache/LMCache/third_party/torchac_cuda
-RUN pip install -e .
+# Download the demo
+ARG LMCACHE_COMMIT_ID=1
+WORKDIR /lmcache
+RUN git clone https://github.com/LMCache/demo/
+WORKDIR /lmcache/demo
+RUN git checkout blend-demo
+RUN pip install openai streamlit
 
-ENTRYPOINT ["python3", "-m", "vllm.entrypoints.openai.api_server"]
+#ENTRYPOINT ["python3", "-m", "vllm.entrypoints.openai.api_server"]
 #################### LMCache test SERVER ####################
 

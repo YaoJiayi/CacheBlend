@@ -1006,15 +1006,15 @@ class ModelRunner:
         if self.vision_language_config:
             execute_model_kwargs.update({"image_input": multi_modal_input})
         
-        torch.cuda.synchronize()
-        start = torch.cuda.Event(enable_timing=True)
-        end = torch.cuda.Event(enable_timing=True)
-        start.record()
+        #torch.cuda.synchronize()
+        #start = torch.cuda.Event(enable_timing=True)
+        #end = torch.cuda.Event(enable_timing=True)
+        #start.record()
         hidden_states = model_executable(**execute_model_kwargs)
-        end.record()
-        torch.cuda.synchronize()
-        partial_time = start.elapsed_time(end)/1000
-        print(f"Model running time: {partial_time}")
+        #end.record()
+        #torch.cuda.synchronize()
+        #partial_time = start.elapsed_time(end)/1000
+        #print(f"Model running time: {partial_time}")
         
         # HACK(Jiayi): only use cpu local store
         # Cache engine: gather the kv cache and store it to cache engine

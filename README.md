@@ -17,4 +17,10 @@ cd ..
 ```
 python example/blend.py
 ```
+
+## Run Musique dataset
+### Compare LLM inference with CacheBlend and normal prefill
+```
+python example/blend_musique.py
+```
 ## References

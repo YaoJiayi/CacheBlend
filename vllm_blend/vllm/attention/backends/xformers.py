@@ -6,7 +6,8 @@ import torch
 from xformers import ops as xops
 from xformers.ops.fmha.attn_bias import (AttentionBias,
                                          BlockDiagonalCausalMask,
-                                         LowerTriangularMaskWithTensorBias)
+                                         LowerTriangularMaskWithTensorBias,
+                                         LowerTriangularFromBottomRightMask)
 
 from vllm.attention.backends.abstract import (AttentionBackend, AttentionImpl,
                                               AttentionMetadata,
@@ -201,24 +202,22 @@ class XFormersImpl(AttentionImpl):
             value_old = old_kv[1].view(-1, self.num_kv_heads, self.head_size)
         
         if status in [1]:
-            last_len = 1
-            topk_num = int((value.shape[0]-last_len)*cache_fuse_metadata["recomp_ratio"])
+            last_len = cache_fuse_metadata['suffix_len']
+            total_len = value.shape[0]
+            last_indices = [total_len-last_len+l for l in range(last_len)]
 
+            topk_num = int((total_len-last_len)*cache_fuse_metadata["recomp_ratio"])
             temp_diff = torch.sum((value[:-last_len,:,:]-value_old[:-last_len,:,:])**2, dim=[1,2])
             top_indices = torch.topk(temp_diff, k=topk_num).indices
             
-            # FIXME(Jiayi): Need changing to query len
-            for l in range(last_len):
-                temp_idx = num_tokens-(last_len-l)
-                top_indices = torch.cat([top_indices,torch.tensor([temp_idx], device=top_indices.device)])
-            #if num_tokens-1 not in top_indices:
-            #    top_indices = torch.cat([top_indices,torch.tensor([num_tokens-1], device=top_indices.device)])
-            #our_slot_mapping = attn_metadata.slot_mapping[top_indices]
-            #cache_fuse_metadata["our_slot_mapping"] = our_slot_mapping
+            top_indices, _ = torch.sort(top_indices)
+            top_indices = torch.cat([top_indices,
+                                        torch.tensor(last_indices, device=top_indices.device)])
             query = query[top_indices]
             cache_fuse_metadata["imp_indices"] = top_indices
             
-            attn_bias = _make_partial_bias_gqa(cache_fuse_metadata, query.device, self.num_kv_heads, self.num_queries_per_kv)
+            #attn_bias = _make_partial_bias_gqa(cache_fuse_metadata, query.device, self.num_kv_heads, self.num_queries_per_kv)
+            attn_bias = LowerTriangularFromBottomRightMask()
             cache_fuse_metadata["attn_bias"] = attn_bias
             attn_metadata.prefill_metadata.attn_bias=None
             

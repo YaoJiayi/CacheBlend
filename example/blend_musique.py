@@ -102,9 +102,6 @@ for ex in eval_dataset:
         
     input_prompt = tokenizer.decode(input_ids)
     
-    import pdb
-    pdb.set_trace()
-    
     sampling_params = SamplingParams(temperature=0, max_tokens=32)
     cache_fuse_metadata["check"] = True
     cache_fuse_metadata['collect'] = False

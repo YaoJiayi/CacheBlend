@@ -22,7 +22,6 @@ ttft_full = []
 f1_blend = []
 f1_full = []
 
-#TODO (Jiayi): fix filler tokens at the begining or pass in tokenizer
 for ex in eval_dataset:
     answers = ex["answers"]
     doc_prompts, q_prompt = build_qa_prompt(ex, query_prompt)
@@ -85,10 +84,9 @@ for ex in eval_dataset:
             if i == 0:
                 chunk_past_key_values.append([temp_k, temp_v])
             else:
-                #pdb.set_trace()
                 chunk_past_key_values[j][0] = torch.cat((chunk_past_key_values[j][0],temp_k), dim=0)
                 chunk_past_key_values[j][1] = torch.cat((chunk_past_key_values[j][1],temp_v), dim=0)
-        #print(temp_k.shape[0])
+
         llm.llm_engine.model_executor.driver_worker.model_runner.model.model.old_kvs = chunk_past_key_values
         
     input_ids = []

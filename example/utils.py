@@ -14,6 +14,14 @@ def normalize_question(question):
 
     return question[0].lower() + question[1:]
 
+def parse_generation(s):
+    s = s.lstrip('\n').split('\n')[0]
+    if s.startswith("Yes") or s.startswith("yes"):
+        s = "Yes"
+    elif (s.split()[0]).startswith("No") or (s.split()[0]).startswith("no"):
+        s = "No"
+    return s
+
 def normalize_answer(s):
     def remove_articles(text):
         return re.sub(r"\b(a|an|the)\b", " ", text)
@@ -40,6 +48,7 @@ def build_qa_prompt(example, query_prompt):
     return doc_prompts, q_prompt
 
 def compute_f1(a_pred, a_gold, tokenizer):
+    a_pred = parse_generation(a_pred)
     gold_toks = tokenizer.encode(normalize_answer(a_gold))[1:]
     pred_toks = tokenizer.encode(normalize_answer(a_pred))[1:]
     #gold_toks = tokenizer.encode_chat_completion(ChatCompletionRequest(messages=[UserMessage(content=normalize_answer(a_gold))])).tokens[4:-4]

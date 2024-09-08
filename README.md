@@ -10,7 +10,6 @@ git clone git@github.com:YaoJiayi/CacheBlend.git
 cd CacheBlend/vllm_blend
 pip install -e .
 cd ..
-pip install -r requirements.txt
 ```
 
 

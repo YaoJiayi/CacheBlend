@@ -2,6 +2,7 @@ import json
 import collections
 import string
 import re
+from rouge_score import rouge_scorer
 
 def load_dataset(dataset_path):
     print("Loading dataset:", dataset_path)
@@ -47,6 +48,12 @@ def build_qa_prompt(example, query_prompt):
     q_prompt = f"{query_prompt}{q}\nAnswer:"
     return doc_prompts, q_prompt
 
+def build_fewshot_prompt(example):
+    q = "\n\n"+example["question"]
+    doc_prompts = [f"{ctx['text']}" for ctx in example["ctxs"]]
+    q_prompt = f"{q}"
+    return doc_prompts, q_prompt
+
 def compute_f1(a_pred, a_gold, tokenizer):
     a_pred = parse_generation(a_pred)
     gold_toks = tokenizer.encode(normalize_answer(a_gold))[1:]
@@ -65,3 +72,8 @@ def compute_f1(a_pred, a_gold, tokenizer):
     recall = 1.0 * num_same / len(gold_toks)
     f1 = (2 * precision * recall) / (precision + recall)
     return f1
+
+def compute_rl(pred, gold):
+    scorer = rouge_scorer.RougeScorer(['rougeL'], use_stemmer=True)
+    rougeL = scorer.score(gold, pred)['rougeL'].fmeasure
+    return rougeL

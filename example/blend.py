@@ -46,6 +46,7 @@ for sample_idx in range(1,11):
     doc_chunk_ids = [s_start_full] + doc_chunk_ids
     doc_chunk_ids = doc_chunk_ids + [s_start+q_ids+s_end]
 
+    last_len = len([q_ids+s_end])
 
     cache_fuse_metadata['collect'] = True
     cache_fuse_metadata["check"] = False
@@ -92,6 +93,7 @@ for sample_idx in range(1,11):
     sampling_params = SamplingParams(temperature=0, max_tokens=10)
     cache_fuse_metadata["check"] = True
     cache_fuse_metadata['collect'] = False
+    cache_fuse_metadata['suffix_len'] = last_len
     output = llm.generate([input_prompt], sampling_params)
     print(f"Cached generation: {output[0].outputs[0].text}")
     print(f"TTFT with cache: {output[0].metrics.first_token_time-output[0].metrics.first_scheduled_time}")

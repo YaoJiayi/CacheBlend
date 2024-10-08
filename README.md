@@ -2,6 +2,7 @@
 
 This is the code repo for [CacheBlend: Fast Large Language Model Serving with Cached Knowledge Fusion](). The current implementation is based on [vLLM](https://github.com/vllm-project/vllm/tree/main).
 
+The newest updates will always be at [LMCache](https://github.com/LMCache/LMCache). Stay tuned !!!
 ## Installation
 To install CacheBlend depenencies
 ```

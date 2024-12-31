@@ -30,3 +30,14 @@ python example/blend_musique.py
 ```
 To run datasets other than musique, please replace `musique` with `samsum` or `wikimqa` in the above command.
 ## References
+```
+@misc{yao2024cacheblendfastlargelanguage,
+      title={CacheBlend: Fast Large Language Model Serving for RAG with Cached Knowledge Fusion}, 
+      author={Jiayi Yao and Hanchen Li and Yuhan Liu and Siddhant Ray and Yihua Cheng and Qizheng Zhang and Kuntai Du and Shan Lu and Junchen Jiang},
+      year={2024},
+      eprint={2405.16444},
+      archivePrefix={arXiv},
+      primaryClass={cs.LG},
+      url={https://arxiv.org/abs/2405.16444}, 
+}
+```
